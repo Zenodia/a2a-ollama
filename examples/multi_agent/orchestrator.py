@@ -23,9 +23,9 @@ class AgentOrchestrator:
     
     def __init__(
         self,
-        knowledge_endpoint: str = "http://localhost:8001",
+        knowledge_endpoint: str = "http://localhost:8003",
         reasoning_endpoint: str = "http://localhost:8002",
-        creative_endpoint: str = "http://localhost:8003"
+        creative_endpoint: str = "http://localhost:8001"
     ):
         """
         Initialize the orchestrator.
