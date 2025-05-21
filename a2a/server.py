@@ -11,10 +11,12 @@ import requests
 import threading
 from flask import Flask, request, jsonify, Response, stream_with_context
 from typing import Dict, Any, List, Optional, Callable
-
-from a2a.core.a2a_ollama import A2AOllama
-
-
+from dotenv import load_dotenv
+from a2a.core.a2a_nvidia import A2ANvidia
+import os
+load_dotenv()
+api_key=os.environ["NVIDIA_API_KEY"]
+print("NVIDIA_API_KEY=", api_key[-4:])
 class A2AServer:
     """
     A Flask-based HTTP server for A2A.
@@ -22,12 +24,13 @@ class A2AServer:
     
     def __init__(
         self,
-        model: str,
+        model: str ,
         name: str,
         description: str,
         skills: List[Dict[str, Any]],
         port: int = 8000,
-        ollama_host: str = "http://localhost:11434",
+        base_url: str = "https://integrate.api.nvidia.com/v1",
+        api_key: str = api_key,
         endpoint: str = None,
         webhook_url: str = None
     ):
@@ -35,12 +38,13 @@ class A2AServer:
         Initialize the A2A server.
         
         Args:
-            model: The Ollama model to use
+            model: The NVIDIA model to use
             name: The name of the agent
             description: A description of the agent
             skills: A list of skills the agent has
             port: The port to run the server on
-            ollama_host: The Ollama host URL
+            base_url: The NVIDIA API base URL
+            api_key: The NVIDIA API key
             endpoint: The endpoint where this agent is accessible
             webhook_url: URL to send task status updates to (optional)
         """
@@ -48,16 +52,22 @@ class A2AServer:
         self.webhook_url = webhook_url
         self.server_thread = None
         self.should_stop = False
-        
+        self.model = "qwen/qwen3-235b-a22b" if model is None else model
+        self.name = "NVIDIA NIM Agent" if name is None else name
+        self.api_key=os.environ["NVIDIA_API_KEY"]
         if endpoint is None:
             endpoint = f"http://localhost:{port}"
-        
-        self.a2a_ollama = A2AOllama(
-            model=model,
-            name=name,
+        print("A2A Server model, name : \n", self.model,self.name)
+        print("description=", description)
+        print("skills=",skills) 
+        print(base_url, api_key[-2:])
+        self.a2a_nvidia = A2ANvidia(
+            model=self.model,
+            name=self.name,
             description=description,
             skills=skills,
-            host=ollama_host,
+            base_url=base_url,
+            api_key=api_key,
             endpoint=endpoint,
         )
         
@@ -78,7 +88,7 @@ class A2AServer:
             
         try:
             # Get the task to check for webhook_task_id
-            task = self.a2a_ollama.task_manager.get_task(task_id)
+            task = self.a2a_nvidia.task_manager.get_task(task_id)
             
             # Use webhook_task_id if available, otherwise use task_id
             webhook_task_id = task.get("params", {}).get("webhook_task_id", task_id)
@@ -114,11 +124,11 @@ class A2AServer:
         """Set up Flask routes."""
         @self.app.route("/.well-known/agent.json", methods=["GET"])
         def agent_card():
-            return jsonify(self.a2a_ollama.agent_card.to_dict())
+            return jsonify(self.a2a_nvidia.agent_card.to_dict())
         
         @self.app.route("/tasks/<task_id>", methods=["GET"])
         def get_task(task_id):
-            task = self.a2a_ollama.task_manager.get_task(task_id)
+            task = self.a2a_nvidia.task_manager.get_task(task_id)
             if task:
                 return jsonify(task)
             else:
@@ -127,7 +137,7 @@ class A2AServer:
         @self.app.route("/tasks", methods=["POST"])
         def create_task():
             request_data = request.json
-            task_id = self.a2a_ollama.task_manager.create_task(request_data)
+            task_id = self.a2a_nvidia.task_manager.create_task(request_data)
             
             # Send webhook notification if configured
             if self.webhook_url:
@@ -145,16 +155,16 @@ class A2AServer:
         
         @self.app.route("/tasks/<task_id>/messages", methods=["POST"])
         def add_message(task_id):
-            task = self.a2a_ollama.task_manager.get_task(task_id)
+            task = self.a2a_nvidia.task_manager.get_task(task_id)
             if not task:
                 return jsonify({"error": f"Task not found: {task_id}"}), 404
             
             message = request.json
-            added_message = self.a2a_ollama.message_handler.add_message(task_id, message)
+            added_message = self.a2a_nvidia.message_handler.add_message(task_id, message)
             
             # Process the task if status is submitted
             if task["status"] == "submitted":
-                self.a2a_ollama.task_manager.update_task_status(task_id, "working")
+                self.a2a_nvidia.task_manager.update_task_status(task_id, "working")
                 
                 # Send webhook notification for status change
                 if self.webhook_url:
@@ -164,7 +174,7 @@ class A2AServer:
                         {"message_id": added_message["id"]}
                     )
                     
-                result = self.a2a_ollama._process_task(task_id)
+                result = self.a2a_nvidia._process_task(task_id)
                 
                 # Send webhook notification for completion
                 if self.webhook_url:
@@ -181,12 +191,12 @@ class A2AServer:
         @self.app.route("/tasks/<task_id>/messages/stream", methods=["POST"])
         def add_message_stream(task_id):
             """Stream the response using Server-Sent Events (SSE)"""
-            task = self.a2a_ollama.task_manager.get_task(task_id)
+            task = self.a2a_nvidia.task_manager.get_task(task_id)
             if not task:
                 return jsonify({"error": f"Task not found: {task_id}"}), 404
             
             message = request.json
-            added_message = self.a2a_ollama.message_handler.add_message(task_id, message)
+            added_message = self.a2a_nvidia.message_handler.add_message(task_id, message)
             
             def generate_streaming_response():
                 """Generator function for SSE streaming"""
@@ -196,7 +206,7 @@ class A2AServer:
                 # Only process if status is submitted
                 if task["status"] == "submitted":
                     # Update task status
-                    self.a2a_ollama.task_manager.update_task_status(task_id, "working")
+                    self.a2a_nvidia.task_manager.update_task_status(task_id, "working")
                     
                     # Send status change event
                     yield f"event: status_changed\ndata: {json.dumps({'status': 'working'})}\n\n"
@@ -210,12 +220,12 @@ class A2AServer:
                         )
                     
                     # Process the task with streaming
-                    for chunk in self.a2a_ollama._process_task_stream(task_id):
+                    for chunk in self.a2a_nvidia._process_task_stream(task_id):
                         # Send each chunk as SSE data
                         yield f"event: chunk\ndata: {json.dumps(chunk)}\n\n"
                     
                     # Get final task status
-                    final_status = self.a2a_ollama.task_manager.get_task(task_id)["status"]
+                    final_status = self.a2a_nvidia.task_manager.get_task(task_id)["status"]
                     
                     # Send completion event
                     completion_data = {
@@ -241,7 +251,7 @@ class A2AServer:
         @self.app.route("/rpc", methods=["POST"])
         def handle_rpc():
             request_data = request.json
-            response = self.a2a_ollama.process_request(request_data)
+            response = self.a2a_nvidia.process_request(request_data)
             return jsonify(response)
     
     def _run_server(self):
@@ -279,7 +289,8 @@ def run_server(
     description: str,
     skills: List[Dict[str, Any]],
     port: int = 8000,
-    ollama_host: str = "http://localhost:11434",
+    base_url: str = "https://integrate.api.nvidia.com/v1",
+    api_key: str = None,
     endpoint: str = None,
     webhook_url: str = None
 ):
@@ -287,12 +298,13 @@ def run_server(
     Run the A2A server.
     
     Args:
-        model: The Ollama model to use
+        model: The NVIDIA model to use
         name: The name of the agent
         description: A description of the agent
         skills: A list of skills the agent has
         port: The port to run the server on
-        ollama_host: The Ollama host URL
+        base_url: The NVIDIA API base URL
+        api_key: The NVIDIA API key
         endpoint: The endpoint where this agent is accessible
         webhook_url: URL to send task status updates to (optional)
     """
@@ -302,7 +314,8 @@ def run_server(
         description=description,
         skills=skills,
         port=port,
-        ollama_host=ollama_host,
+        base_url=base_url,
+        api_key=api_key,
         endpoint=endpoint,
         webhook_url=webhook_url
     )
@@ -326,8 +339,9 @@ if __name__ == "__main__":
     ]
     
     run_server(
-        model="gemma3:27b",
-        name="Ollama A2A Agent",
-        description="An A2A-compatible agent powered by Ollama",
-        skills=skills
+        model="qwen/qwen3-235b-a22b",
+        name="NVIDIA A2A Agent",
+        description="An A2A-compatible agent powered by NVIDIA",
+        skills=skills,
+        api_key=os.getenv("NVIDIA_API_KEY")
     ) 
