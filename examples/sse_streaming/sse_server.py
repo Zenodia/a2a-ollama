@@ -13,7 +13,7 @@ import time
 # Add parent directory to Python path to import a2a
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from a2a.server import run_server
+from a2a.server import A2AServer
 
 def start_sse_server(port=8000):
     """
@@ -39,16 +39,13 @@ def start_sse_server(port=8000):
     print(f"Starting SSE streaming server on port {port}...")
     print("This server demonstrates the A2A protocol's SSE streaming capabilities.")
     print("Use the SSE client example to see real-time streaming responses.")
+    myserver=A2AServer(model="qwen/qwen3-235b-a22b",name="SSE Streaming Agent", description="An A2A-compatible agent that demonstrates real-time streaming responses", skills=skills, port=port)
+    # Start the A2A server with the Knowledge Agent
     
+    # Start the A2A server with the Reasoning Agent
     # Run the server using the core A2A implementation
     # No special configuration is needed as SSE support is built into the core
-    run_server(
-        model="gemma3:27b",  # Use a model that's likely available
-        name="SSE Streaming Agent",
-        description="An A2A-compatible agent that demonstrates real-time streaming responses",
-        skills=skills,
-        port=port
-    )
+    myserver._run_server()  
 
 if __name__ == "__main__":
     import argparse
